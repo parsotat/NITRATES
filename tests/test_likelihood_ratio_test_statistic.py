@@ -23,7 +23,10 @@ import logging, traceback
 import sys
 
 
-
+#################################################################################
+# Function for calculating the likelihood ratio test statistic in the same manner
+# as in the Example_LLH_setup_fixed_dirs.ipynb notebook. Here, we specify the
+# theta and phi values of the source signal as arguments.
 def calculate_LLH_ratio_test_statistic(theta, phi):
 
     import nitrates
@@ -163,16 +166,24 @@ def calculate_LLH_ratio_test_statistic(theta, phi):
     sqrtTS = np.sqrt(2.*(bkg_nllh - nllh[0]))
     return sqrtTS
 
+#################################################################################
+# Testing the calculation of the LLH ratio test statistic for an IFOV source 
+# signal at theta, phi = 38.54132137017975, 137.65241966813443, (or given as
+# ra, dec = 233.117, -26.213)
 def test_LLH_ratio_test_statistic_IFOV():
 
     sqrtTS = calculate_LLH_ratio_test_statistic(38.54132137017975, 137.65241966813443)
     assert (math.isclose(sqrtTS, 17.01015262757948) == True)
 
-
+#################################################################################
+# Testing the calculation of the LLH ratio test statistic for an OFOV source 
+# signal at theta, phi = 125.0, 25.0.
 def test_LLH_ratio_test_statistic_OFOV():
     
     sqrtTS = calculate_LLH_ratio_test_statistic(125.0, 25.0)
     assert (math.isclose(sqrtTS, 15.558480899442337) == True)
+
+
 
 if __name__ == "__main__":
     
