@@ -691,11 +691,16 @@ class Bkg_Model_wFlatA(Model):
 
     def __init__(self, bl_dmask, solid_ang_dpi, nebins,\
                  use_prior=False, use_deriv=False):
-
+        
+        # The class creates class variables for the solid angle dpi, sa_dpi, the
+        # solid angle dpi restricted to the functioning detectors, solid_angs, 
+        # and the mean of solid_angs given by the variable solid_ang_mean.
         self.sa_dpi = solid_ang_dpi
         self.solid_angs = solid_ang_dpi[bl_dmask]
         self.solid_ang_mean = np.mean(self.solid_angs)
 
+        # The parameter names for the background rate and flat parameters are
+        # set up below within a list
         self.rate_names = ['bkg_rate_' + str(i) for i\
                        in range(nebins)]
 
@@ -721,7 +726,10 @@ class Bkg_Model_wFlatA(Model):
 #         else:
 #             rates = bkg_obj.get_rate(t)[0]
 
-
+        # For each of the parameters within param_names we set up the 
+        # corresponding bounds and values within a dictionary depending on 
+        # whether they correspond with the background rate parameters or 
+        # the flat rate parameters.
         for i, pname in enumerate(param_names):
             pdict = {}
             if 'rate' in pname:
@@ -732,12 +740,16 @@ class Bkg_Model_wFlatA(Model):
                 pdict['val'] = 0.25
             pdict['nuis'] = True
             pdict['fixed'] = False
+
+            # For each parameter name, we save its dictionary of parameter values
+            # into param_dict
             param_dict[pname] = pdict
 
+        # Borrowing the .__init__() function from the parent class
         super(Bkg_Model_wFlatA, self).__init__('Background', bl_dmask,\
                                         param_names, param_dict,\
                                         nebins, has_prior=use_prior)
-
+       
         self._rate_ones = np.ones(self.ndets)
         self._rate_zeros = np.zeros(self.ndets)
 
@@ -767,8 +779,9 @@ class Bkg_Model_wFlatA(Model):
         self.set_prior(bkg_rates, bkg_rate_errs, err_factor=err_factor)
 
 
-
+    
     def set_prior(self, exp_rates, bkg_sigs, err_factor=2.0):
+
         self.exp_rates = exp_rates
         self.bkg_sigs = bkg_sigs
         self.err_factor = err_factor
@@ -798,12 +811,16 @@ class Bkg_Model_wFlatA(Model):
 
         return rate_dpis
 
+    # Returns the rate dpi for the jth energy bin
     def get_rate_dpi(self, params, j):
 
+        # We get rate using the jth rate_name as index for params, likewise
+        # for the flat_A by using the jth index of flat_names
         rate = params[self.rate_names[j]]
         flat_A = params[self.flat_names[j]]
         diff_A = 1. - flat_A
 
+        # Calculating the rate dpi 
         rate_dpi = rate*((diff_A/self.solid_ang_mean)*self.solid_angs + flat_A)
 
 

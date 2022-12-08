@@ -98,6 +98,8 @@ def add_imxy2src_tab(src_tab, attfile, t0):
     src_tab['imy'] = imys
     return src_tab
 
+
+
 def get_srcs_infov(attfile, t0, pcfname=None, pcmin=5e-2):
 
     brt_src_tab = Table.read(bright_source_table_fname)
@@ -293,19 +295,28 @@ def bkg_withPS_fit(PS_tab, model, llh_obj, t0s, t1s,\
     return bf_nllh, bf_params
 
 
-
 def do_init_bkg_wPSs(bkg_mod, llh_obj, src_tab, rt_obj, GTI, sig_twind,\
                     TSmin=7.0, Nprocs=1, tmin=None, tmax=None):
 
+    # Contructing the good time interval for the background fitting. In this
+    # case, we must disregard the "bad time intervals" starting with the window
+    # of time extending from before tmin and the window of time beyond tmax.
     if not tmin is None:
         bti = (-np.inf, tmin)
         GTI = add_bti2gti(bti, GTI)
     if not tmax is None:
         bti = (tmax, np.inf)
         GTI = add_bti2gti(bti, GTI)
+
+    # Since we are only interested in the background, we also disregard the time
+    # intervals including the signal. 
     gti_bkg = add_bti2gti(sig_twind, GTI)
+    
+    # After adding all the bad time intervals, we get our t0s and t1s from the 
+    # remaining values in the 'START' and 'STOP' columns in gti_bkg. 
     bkg_t0s = gti_bkg['START']
     bkg_t1s = gti_bkg['STOP']
+
     exp = 0.0
     for i in range(len(bkg_t0s)):
         exp += (bkg_t1s[i] - bkg_t0s[i])
@@ -330,6 +341,7 @@ def do_init_bkg_wPSs(bkg_mod, llh_obj, src_tab, rt_obj, GTI, sig_twind,\
     Nsrcs = len(src_tab)
     nebins = bkg_mod.nebins
 
+
     for ii in range(Nsrcs):
         mod_list = [bkg_mod]
         im_steps = 5
@@ -345,6 +357,10 @@ def do_init_bkg_wPSs(bkg_mod, llh_obj, src_tab, rt_obj, GTI, sig_twind,\
             TSmin_ = TSmin - 2.5
 
         ps_mods = []
+
+        # For each of known sources within the FOV, we create a corresponding 
+        # Point Source model using binned rates and append them to list of point
+        # source models
         for i in range(Nsrcs):
             row = src_tab[i]
             mod = Point_Source_Model_Binned_Rates(row['imx'], row['imy'], 0.1,\
@@ -353,11 +369,17 @@ def do_init_bkg_wPSs(bkg_mod, llh_obj, src_tab, rt_obj, GTI, sig_twind,\
                                                   use_deriv=True, name=row['Name'])
             ps_mods.append(mod)
 
+        # With all of the point source models and the background model we can
+        # create a single compound point source + background model and set it
+        # as our model for the likelihood calculation. 
         mod_list += ps_mods
         comp_mod = CompoundModel(mod_list)
 
         llh_obj.set_model(comp_mod)
 
+        # Perform a fit on the background model with the point sources. Using 
+        # bkg_withPS_fit() we receive the back the negative log likelihood,
+        # background fit parameters, and (what are TS_nulls)
         bf_nllh, bf_params, TS_nulls = bkg_withPS_fit(src_tab, comp_mod,\
                                       llh_obj, bkg_t0s, bkg_t1s,\
                                       test_null=True, im_steps=im_steps,\
@@ -366,11 +388,20 @@ def do_init_bkg_wPSs(bkg_mod, llh_obj, src_tab, rt_obj, GTI, sig_twind,\
         logging.debug("TS_nulls: ")
         logging.debug(TS_nulls)
 
+        # We compile an array of all background rate parameters from bf_params as
+        # well as an analogous array of min rates after multiplying the 
+        # background rates by 0.1
         bkg_rates = np.array([bf_params['Background'+'_bkg_rate_'+str(j)]\
                             for j in range(nebins)])
         min_rate = 1e-1*bkg_rates
         logging.debug("min_rate: ")
         logging.debug(min_rate)
+
+        # For the names of each item in TS_nulls, we look into their rate 
+        # parameters and compare them to the minimum rate calculated above. If 
+        # all of them are less than the min_rate, we also check if they all are 
+        # less than min_rate/20. If the rates are less than both then we append 
+        # the coresponding point source name to our list of point sources to keep.
         PSs2keep = []
         for name, TS in TS_nulls.items():
             ps_rates = np.array([bf_params[name+'_rate_'+str(j)] for j in range(nebins)])
@@ -398,13 +429,17 @@ def do_init_bkg_wPSs(bkg_mod, llh_obj, src_tab, rt_obj, GTI, sig_twind,\
         #     for k, val in corr_dict.iteritems():
         #         corrs_dict[k] = val
 
-
+        # Why do we break here?
         if len(PSs2keep) == len(src_tab):
             break
+
+        # If we don't retain any of the point sources, then we set our number of 
+        # sources to 0 and set our src_tab to zeros.
         if len(PSs2keep) == 0:
             Nsrcs = 0
             src_tab = src_tab[np.zeros(len(src_tab), dtype=np.bool)]
             break
+
         bl = np.array([src_tab['Name'][i] in PSs2keep for i in range(Nsrcs)])
         src_tab = src_tab[bl]
         Nsrcs = len(src_tab)
@@ -470,25 +505,40 @@ def get_errs_corrs(llh_obj, model, params, e0, pnames2skip=[]):
 def bkg_withPS_fit_fiximxy(PS_tab, model, llh_obj, t0s, t1s, params_,\
                            fixed_pnames=None):
 
+    # copy the initial parameters
     Nps = len(PS_tab)
     params = copy(params_)
 
+    # We set our likelihood object, llh, with the provided model and set its time
+    # with the provided t0s and t1s. Using this likelihood object we set the 
+    # likelihood for a minimizer object for the background.
     llh_obj.set_model(model)
     bkg_miner = NLLH_ScipyMinimize_Wjacob('')
     bkg_miner.set_llh(llh_obj)
     llh_obj.set_time(t0s,t1s)
 
+    # We set up the background fit parameters and the fixed values for each of
+    # fixed parameters provided as arguments.
     nllh = 0.0
 #     bf_params = {fixed_pars[i]:fixed_vals[i] for i in range(len(fixed_pars))}
     bf_params = copy(params)
     fixed_vals = [bf_params[pname] for pname in fixed_pnames]
     errs_dict = {}
     corrs_dict = {}
-
+    
+    # Iterating over each energy bin
     for e0 in range(llh_obj.nebins):
+        
+        # We set the fixed parameters of the minimizer using the parameters from 
+        # the param_names class variable.
         bkg_miner.set_fixed_params(bkg_miner.param_names)
+
+        # For any of the fixed parameters listed in fixed_pnames, we set their 
+        # fixed value from fixed_vals.
         if fixed_pnames is not None:
             bkg_miner.set_fixed_params(fixed_pnames, values=fixed_vals)
+
+        # We compile a list of the remaining parameters that have not been fixed.
         e0_pnames = []
         for pname in bkg_miner.param_names:
             try:
@@ -496,9 +546,15 @@ def bkg_withPS_fit_fiximxy(PS_tab, model, llh_obj, t0s, t1s, params_,\
                     e0_pnames.append(pname)
             except:
                 pass
+        
+        # Using .set_fixed_params(), we set the parameters with fixed=False to
+        # indicate that these parameters will be varied over.
         bkg_miner.set_fixed_params(e0_pnames, fixed=False)
         llh_obj.set_ebin(e0)
 
+        # We run the minimize() function and add the bkg_nllh value to the
+        # overall nllh value and add the bf_vals values for each of the 
+        # parameters to the list of parameters bf_params.
         bf_vals, bkg_nllh, res = bkg_miner.minimize()
         nllh += bkg_nllh[0]
         for ii, pname in enumerate(e0_pnames):
@@ -531,19 +587,29 @@ def main(args):
     else:
         db_fname = args.dbfname
 
+    # Creating connection object to the database file path.
     logging.info('Connecting to DB')
     conn = get_conn(db_fname)
 
+    # Retrieving the info tab from the database file which includes variables 
+    # for the time start, stop, and trigger time.
     info_tab = get_info_tab(conn)
     logging.info('Got info table')
 
+    # Retrieves tab containing various file names.
     files_tab = get_files_tab(conn)
     logging.info('Got files table')
 
+    # Getting the trigger time from the info tab and setting up the start and 
+    # stop times using the twind index. (tstart and tstop not referenced outside
+    # these two lines)
     trigtime = info_tab['trigtimeMET'][0]
     tstart = trigtime - args.twind
     tstop = trigtime + args.twind
 
+    # We read in the data for each of the files. For the event data, we read in 
+    # only the events corresponding to good time intervals where the craft is 
+    # pointing and if not available, any good time interval data.
     evfname = files_tab['evfname'][0]
     dmfname = files_tab['detmask'][0]
     attfname = files_tab['attfname'][0]
@@ -552,11 +618,22 @@ def main(args):
         GTI = Table.read(evfname, hdu='GTI_POINTING')
     except:
         GTI = Table.read(evfname, hdu='GTI')
+
+    # Reading in detector data.
     dmask = fits.open(dmfname)[0].data
+
+    # Restricting our detectors to just the functioning detectors.
     bl_dmask = (dmask==0.)
+
+    # Reading in the craft attitude data
     attfile = fits.open(attfname)[1].data
     logging.debug('Opened up event, detmask, and att files')
 
+    # We restrict our good time intervals to start times 200s after trigger time
+    # and stop times 200 second before trig time. 
+    # 
+    # We calculate the total time elapsed by adding up the difference between the
+    # STOP and START times for each row of the GTI table. 
     logging.debug('trigtime: %.3f'%(trigtime))
     gti_bl = (GTI['STOP']>(trigtime-2e3))&(GTI['START']<(trigtime+2e3))
     logging.debug('Full GTI_pnt: ')
@@ -570,13 +647,19 @@ def main(args):
     logging.info("Tot_Exp: ")
     logging.info(tot_exp)
 
-
+    # From the GTI, we can get the minimum and maximum times as well the midpoint
+    # times of the GTI. We set tmid to the midpoint that is closest to the 
+    # trigger time
     tmin = GTI['START'][0]
     tmax = GTI['STOP'][-1]
     tmids = (GTI['START']+GTI['STOP'])/2.
     tmid = tmids[np.argmin(np.abs(tmids - trigtime))]
     logging.info('tmid: %.3f'%(tmid))
     # sig_twind = (tmid - 40.0, tmid+40.0)
+
+    # We construct the signal window of time using the trigger time. If we 
+    # provided args.archive (what is in archive?) then we just create a 
+    # signal window around the tmin and tmax values.
     sig_dtwind = (-10*1.024, 20*1.024)
     sig_twind = (trigtime + sig_dtwind[0], trigtime + sig_dtwind[1])
     if args.archive:
@@ -584,7 +667,9 @@ def main(args):
     logging.info("sig_twind: ")
     logging.info(sig_twind)
 
-
+    # We create energy energy bins from the EBINS0 and EBINS1 
+    # variables defined in config.py.(why are we redefining ebins0 
+    # and ebins1 again through another process?)
     ebins0 = np.array(EBINS0)
     ebins1 = np.array(EBINS1)
     ebins0 = np.array([15.0, 24.0, 35.0, 48.0, 64.0])
@@ -597,25 +682,36 @@ def main(args):
     logging.debug("ebins1")
     logging.debug(ebins1)
 
+    # Reading in the solid angle dpis.
     solid_angle_dpi = np.load(solid_angle_dpi_fname)
 
+    # src_tab calls get_srcs_infov. The function looks up a table of known, 
+    # bright sources and checks whether their imx,imy coordinates are within the
+    # field of view of the telescope. (what is a PC file? Also extraneous 
+    # calculation of N_infov within function). The function returns the entries 
+    # within the bright source table that are within the field of view. 
     src_tab = get_srcs_infov(attfile, tmid, pcfname=args.pcfname)
     Nsrcs = len(src_tab)
     logging.info("src_tab: ")
     logging.info(src_tab)
 
+    # Creating a background model.
     bkg_mod = Bkg_Model_wFlatA(bl_dmask, solid_angle_dpi, nebins, use_deriv=True)
 
+    # Define a likelihood object for future likelihood calculations using the 
+    # energy bins, masked detectors, and event data defined.
     llh_obj = LLH_webins(ev_data, ebins0, ebins1, bl_dmask)
 
-
-    # add in stuff later for if there's no srcs
-
+    # If there are any number of known sources within the FOV, we proceed with
+    # the following.
     if Nsrcs > 0:
-
+        
+        # Creating a RayTraces object for later use when we perform an initial
+        # fit to the background
         rt_dir = files_tab['rtDir'][0]
         rt_obj = RayTraces(rt_dir)
 
+        # Why are we changing the number of processes?
         Nprocs = 1
         if Nsrcs > 1:
             Nprocs = 4
@@ -627,10 +723,15 @@ def main(args):
         else:
             tmin_ = trigtime-5e2
             tmax_ = trigtime+5e2
+
+        # We now want to do an initial fit to the background with our point
+        # sources. We receive back the intial background fit parameters and the 
+        # table of sources within FOV.
         init_bf_params, src_tab = do_init_bkg_wPSs(bkg_mod, llh_obj, src_tab, rt_obj,\
                                                     GTI, sig_twind, Nprocs=Nprocs,\
                                                     tmin=tmin_, tmax=tmax_)
 
+        # Set the number of sources to this new value (why would it change?)
         Nsrcs = len(src_tab)
 
         logging.debug("Final src_tab:")
@@ -638,14 +739,21 @@ def main(args):
 
         # Now need to do each time, with these PSs and these imxys
 
+    # If we didn't find any point sources, then we can set up our initial 
+    # parameters from the parameters of the background model.
     else:
         init_bf_params = {k:bkg_mod.param_dict[k]['val'] for k in bkg_mod.param_names}
 
 
     if Nsrcs > 0:
+        # We isolate the fixed parameters from the list of parameters in 
+        # initial_bf_params. 
         fixed_pars = [pname for pname in list(init_bf_params.keys()) if '_flat_' in pname\
                     or '_imx' in pname or '_imy' in pname]
 
+        # For each of the point sources, we contruct a point source model and add
+        # them to the list of models, mod_list, in order to create a compound
+        # point sources + background model.
         mod_list = [bkg_mod]
         ps_mods = []
         for i in range(Nsrcs):
@@ -658,6 +766,8 @@ def main(args):
         mod_list += ps_mods
         mod = CompoundModel(mod_list)
 
+    # If we didn't find any point sources, then we set our initial background
+    # fit parameters and set our model to the background model.
     else:
         init_bf_params = {k:bkg_mod.param_dict[k]['val'] for k in bkg_mod.param_names}
         mod = bkg_mod
@@ -665,12 +775,18 @@ def main(args):
 
 
     bkg_dur = args.bkg_dur*1.024
+
+    # Aren't we redefining twind here? and for that matter, sig_wind as well?
     if args.archive:
         twind = (1.5e3)*1.024
         twind = args.twind*1.024
     else:
         twind = args.twind*1.024
     bkg_tstep = 1*1.024
+
+    # We arange an array of times, dt_ax from -twind to twind+1 in steps of 
+    # bkg_step (1.024s). Adding the trigger time to dt_ax, we can create a new 
+    # array of times around the central trigger time, called t_ax.
     dt_ax = np.arange(-twind, twind+1, bkg_tstep)
     t_ax = dt_ax + trigtime
     Ntpnts = len(dt_ax)
@@ -681,45 +797,79 @@ def main(args):
     sig_wind = args.sig_twind
     # sig_twind = (trigger_time + sig_dtwind[0], trigger_time + sig_dtwind[1])
 
+    # We construct a signal time window around each of the times in t_ax and
+    # add that signal time window to our bad time intervals. Each time through 
+    # the loop we calculate the background fit.
+    #
+    # The dictonary of the background fit parameters are placed in the following
+    # list for each iteration of the loop.
     bkg_bf_dicts = []
 
 
     for i in range(Ntpnts):
 
+        # We set midtime to the ith index of t_ax
         tmid = t_ax[i]
+
+        # we create a signal window around this midtime of half the signal window
+        # length (and redefine it to -1/4 signal window length before t_mid and
+        # 3/4 signal window length after t_mid?)
         sig_twind = (-sig_wind/2. + tmid, sig_wind/2. + tmid)
         sig_twind = (-sig_wind/4. + tmid, 3.*sig_wind/4. + tmid)
+
+        # We add the signal time window to our bad time intervals.
         gti_ = add_bti2gti(sig_twind, GTI)
         # bkg_t0 = tmid - sig_wind/2. - bkg_dur/2.
         # bkg_t1 = tmid + sig_wind/2. + bkg_dur/2.
+
+        # We add the bad time interval extending from bkg_t0 to -inf and from 
+        # bkg_t1 to +inf to our bad time intervals.
         bkg_t0 = tmid - sig_wind/4. - bkg_dur/2.
         bkg_t1 = tmid + 3.*sig_wind/4. + bkg_dur/2.
         bkg_bti = Table(data=([-np.inf, bkg_t1], [bkg_t0, np.inf]), names=('START', 'STOP'))
         gti_ = add_bti2gti(bkg_bti, gti_)
         print(tmid - trigtime)
         print(gti_)
+
+        # We now have values for t0s and t1s from the good time interval. Using 
+        # the good time interval, we calculate the overall duration of the 
+        # interval by adding up the differences between each of the t1[ii] and 
+        # t0[ii].
         t0s = gti_['START']
         t1s = gti_['STOP']
         exp = 0.0
         for ii in range(len(t0s)):
             exp += (t1s[ii] - t0s[ii])
+
+        # We only continue with the background fit if we cumulatively have less 
+        # than 10 seconds of good time intervals.
         if exp < 10.0:
             continue
 
+        # We perform the background fit using the t0s and t1s defined prior, as 
+        # well as the sources table, models, initial background fit parameters,
+        # and the names of any fixed parameters. 
         nllh, params, errs_dict, corrs_dict = bkg_withPS_fit_fiximxy(src_tab, mod, llh_obj, t0s, t1s,\
                                                                      copy(init_bf_params),\
                                                                      fixed_pnames=fixed_pars)
 
+        # We update params with the results of the above background fit.
         params.update(errs_dict)
         params.update(corrs_dict)
         params['nllh'] = nllh
         params['time'] = tmid
         params['dt'] = tmid - trigtime
+
+        # These params are then appended to the list of background fit 
+        # parameters.
         bkg_bf_dicts.append(params)
+
+        # Why did we append before this parameter was stored into params?
         params['exp'] = llh_obj.dt
 
     bkg_df = pd.DataFrame(bkg_bf_dicts)
 
+    # Saving our background estimation into a .csv file.
     save_fname = 'bkg_estimation.csv'
     logging.info("Saving results in a DataFrame to file: ")
     logging.info(save_fname)
