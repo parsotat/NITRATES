@@ -168,12 +168,11 @@ def calculate_LLH_ratio_test_statistic(theta, phi):
 
 #################################################################################
 # Testing the calculation of the LLH ratio test statistic for an IFOV source 
-# signal at theta, phi = 38.54132137017975, 137.65241966813443, (or given as
-# ra, dec = 233.117, -26.213)
+# signal at theta, phi = 38.541, 137.652, (or given as ra, dec = 233.117, -26.213)
 def test_LLH_ratio_test_statistic_IFOV():
 
-    sqrtTS = calculate_LLH_ratio_test_statistic(38.54132137017975, 137.65241966813443)
-    assert (math.isclose(sqrtTS, 17.01015262757948) == True)
+    sqrtTS = calculate_LLH_ratio_test_statistic(38.541, 137.652)
+    assert (math.isclose(sqrtTS, 17.008497698693443) == True)
 
 #################################################################################
 # Testing the calculation of the LLH ratio test statistic for an OFOV source 

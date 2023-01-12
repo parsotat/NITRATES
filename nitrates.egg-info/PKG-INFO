@@ -6,6 +6,7 @@ Home-page: https://github.com/Swift-BAT/NITRATES
 Author: Jimmy DeLaunay
 Author-email: delauj2@gmail.com
 License: BSD-3-Clause
+Platform: UNKNOWN
 Classifier: Development Status :: 3 - Alpha
 Classifier: Intended Audience :: Science/Research
 Classifier: Programming Language :: Python
@@ -129,4 +130,6 @@ Paths to these files can instead be given as arguments to some of the analysis o
 `ray_trace_funcs.py`
 * Contains the functions and objects to read and perform bilinear interpolation of the foward ray trace images that give the shadowed fraction of detectors at different in FoV sky positions
 * `RayTraces` class manages the reading and interpolation and is used by the point source response function and simple point source model
+
+
 

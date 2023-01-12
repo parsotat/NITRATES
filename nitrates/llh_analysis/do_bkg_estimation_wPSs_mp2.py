@@ -209,6 +209,8 @@ def bkg_withPS_fit(PS_tab, model, llh_obj, t0s, t1s,\
     nebins = model.nebins
     param_list = []
 
+    # For each of the point sources, we will be storing their parameters into a
+    # params_ dictionary.
     for i in range(Npnts):
         bf_params = {}
         im_names = []
