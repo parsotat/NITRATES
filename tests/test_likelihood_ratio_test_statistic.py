@@ -327,6 +327,120 @@ def test_LLH_ratio_test_statistic_OFOV():
 
 if __name__ == "__main__":
     
+    import nitrates
+    from nitrates.config import rt_dir, solid_angle_dpi_fname
+    from nitrates.lib import get_conn, det2dpi, mask_detxy, get_info_tab,\
+                                    get_twinds_tab, ang_sep, theta_phi2imxy,\
+                                    imxy2theta_phi, convert_imxy2radec,\
+                                    convert_radec2thetaphi,\
+                                    convert_radec2imxy, convert_theta_phi2radec
+    from nitrates.response import RayTraces
+    from nitrates.models import Cutoff_Plaw_Flux, Plaw_Flux, \
+                                    get_eflux_from_model, Source_Model_InOutFoV,\
+                                    Bkg_Model_wFlatA, CompoundModel,\
+                                    Point_Source_Model_Binned_Rates,\
+                                    im_dist
+    import nitrates.llh_analysis
+    from nitrates.llh_analysis import parse_bkg_csv, LLH_webins,\
+                                    NLLH_ScipyMinimize_Wjacob
+    
+    theta, phi = 38.541, 137.652
+    work_dir = os.path.join(os.getcwd(), 'nitrates_resp_dir')
+    rt_dir = os.path.join(work_dir,'ray_traces_detapp_npy')
+    nitrates.config.RESP_TAB_DNAME = os.path.join(work_dir,'resp_tabs_ebins')
+    nitrates.config.COMP_FLOR_RESP_DNAME = os.path.join(work_dir,'comp_flor_resps')
+    nitrates.config.HP_FLOR_RESP_DNAME = os.path.join(work_dir,'hp_flor_resps')
+    solid_angle_dpi_fname = os.path.join(work_dir,'solid_angle_dpi.npy')
+    nitrates.config.bright_source_table_fname = os.path.join(work_dir,'bright_src_cat.fits')
+    nitrates.config.ELEMENT_CROSS_SECTION_DNAME = os.path.join(work_dir,'element_cross_sections')
+
+    conn = get_conn(os.path.join(work_dir,'results.db'))
+
+    info_tab = get_info_tab(conn)
+
+    ebins0 = np.array([15.0, 24.0, 35.0, 48.0, 64.0])
+    ebins0 = np.append(ebins0, np.logspace(np.log10(84.0), \
+                                        np.log10(500.0),5+1))[:-1]
+    ebins0 = np.round(ebins0, decimals=1)[:-1]
+    ebins1 = np.append(ebins0[1:], [350.0])
+    nebins = len(ebins0)
+
+    trigger_time = info_tab['trigtimeMET'][0]
+    t_end = trigger_time + 1e3
+    t_start = trigger_time - 1e3
+
+    evfname = os.path.join(work_dir,'filter_evdata.fits')
+    ev_data = fits.open(evfname)[1].data
+
+    GTI_PNT = Table.read(evfname, hdu='GTI_POINTING')
+    GTI_SLEW = Table.read(evfname, hdu='GTI_SLEW')
+
+    attfile = fits.open(os.path.join(work_dir,'attitude.fits'))[1].data
+    att_ind = np.argmin(np.abs(attfile['TIME'] - trigger_time))
+    att_quat = attfile['QPARAM'][att_ind]
+
+    dmask = fits.open(os.path.join(work_dir,'detmask.fits'))[0].data
+    ndets = np.sum(dmask==0)
+
+    mask_vals = mask_detxy(dmask, ev_data)
+    bl_dmask = (dmask==0.)
+
+    bl_ev = (ev_data['EVENT_FLAGS']<1)&\
+        (ev_data['ENERGY']<=500.)&(ev_data['ENERGY']>=14.)&\
+        (mask_vals==0.)&(ev_data['TIME']<=t_end)&\
+        (ev_data['TIME']>=t_start)
+
+    ev_data0 = ev_data[bl_ev]
+
+    ra, dec = convert_theta_phi2radec(theta, phi, att_quat)
+    imx, imy = convert_radec2imxy(ra, dec, att_quat)
+
+    flux_params = {'A':1.0, 'gamma':0.5, 'Epeak':1e2}
+    flux_mod = Cutoff_Plaw_Flux(E0=100.0)
+
+    rt_obj = RayTraces(rt_dir)
+    rt = rt_obj.get_intp_rt(imx, imy)
+
+    sig_mod = Source_Model_InOutFoV(flux_mod, [ebins0,ebins1], bl_dmask,\
+                                    rt_obj, use_deriv=True)
+    sig_mod.get_batxys()
+    sig_mod.set_theta_phi(theta, phi)
+
+    bkg_fname = os.path.join(work_dir,'bkg_estimation.csv')
+    solid_ang_dpi = np.load(solid_angle_dpi_fname)
+    
+    bkg_df, bkg_name, PSnames, bkg_mod, ps_mods = parse_bkg_csv(bkg_fname,\
+                                    solid_ang_dpi, ebins0, ebins1,\
+                                    bl_dmask, rt_dir)
+
+    bkg_mod.has_deriv = False
+    bkg_mod_list = [bkg_mod]
+    Nsrcs = len(ps_mods)
+    if Nsrcs > 0:
+        bkg_mod_list += ps_mods
+        for ps_mod in ps_mods:
+            ps_mod.has_deriv = False
+        bkg_mod = CompoundModel(bkg_mod_list)
+
+    tmid = trigger_time
+    bkg_row = bkg_df.iloc[np.argmin(np.abs(tmid - bkg_df['time']))]
+    bkg_params = {pname:bkg_row[pname] for pname in\
+                bkg_mod.param_names}
+    bkg_name = bkg_mod.name
+
+    pars_ = {}
+    pars_['Signal_theta'] = theta
+    pars_['Signal_phi'] = phi
+    for pname,val in list(bkg_params.items()):
+        pars_[bkg_name+'_'+pname] = val
+    for pname,val in list(flux_params.items()):
+        pars_['Signal_'+pname] = val
+
+    comp_mod = CompoundModel([bkg_mod, sig_mod])
+    
+    sig_llh_obj = nitrates.llh_analysis.LLH.LLH_webins2(ev_data0, ebins0, ebins1, bl_dmask, has_err=True)
+    sig_llh_obj.set_model(comp_mod) 
+    '''
     print("Testing IFOV")
     print("___________________________________________________")
     test_LLH_ratio_test_statistic_IFOV()
@@ -334,3 +448,4 @@ if __name__ == "__main__":
     print("Testing OFOV")
     print("___________________________________________________")
     test_LLH_ratio_test_statistic_OFOV()
+    '''
